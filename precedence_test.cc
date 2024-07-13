@@ -1,213 +1,242 @@
-#include <string>
 #include <iostream>
-#include <vector>
-#include <cctype>
-#include <cstdlib>
 #include <cstdint>
+#include <string>
 #include <cassert>
 
-// I dislike the continue name, every time I read it I get confused
-// This is highly illegal but ít's just me now!
-#define skip_this_character continue
-#define go_to_next_character continue
-
-using namespace std;
-
-enum tag_t
+enum token_type_t
 {
-	EMPTY = 0,
-	LITERAL,
-	OPERATOR
+    TOKEN_NUMBER,
+    TOKEN_PLUS,
+    TOKEN_MINUS,
+    TOKEN_DIVIDE,
+    TOKEN_MULTIPLY,
+    TOKEN_END
 };
 
-std::vector<std::string> tag_to_string{"EMPTY",
-"LITERAL",
-"OPERATOR"
+struct token_t
+{
+    token_type_t token_type;
+    double value;
+    char my_operator;
 };
 
-union data_t
+struct tokenizer_t
 {
-	int literal;
-	uint8_t my_operator;
-};
-
-
-
-struct node_t
-{
-	tag_t tag;
-	data_t data;
-	node_t* lhs;
-	node_t* rhs;
+    std::string input;
+    size_t position;
 };
 
 
-// recursive function.
-void print_nodes(const node_t* node)
+token_t next_token(tokenizer_t& tokenizer)
 {
-	if (nullptr == node)
-	{
-		std::cout << "null" << '\n';
-	}
-	if (node->lhs)
-	{
-		print_nodes(node->lhs);
-	}
-	if (node->rhs)
-	{
-		print_nodes(node->rhs);
-	}
-	std::cout << "tag:" << tag_to_string[node->tag] << " \n" << "data: ";
+    const char* input = tokenizer.input.c_str();
+    size_t position = tokenizer.position;
+    while (input[position] && isspace(input[position]))
+    {
+        ++position;
+    }
 
-	if (node->tag == LITERAL)
-	{
-		std::cout << node->data.literal;
-	}
-	if (node->tag == OPERATOR)
-	{
-		std::cout << (char*)(&node->data.my_operator);
-	}
-	std::cout << '\n';
+    if (!input[position])
+    {
+        return token_t{TOKEN_END, 0, 0};
+    }
+
+    char current = input[position];
+
+    if (isdigit(current) || current == '.')
+    {
+        size_t start = position;
+
+        // keep advancing until no digits.
+        while (isdigit(input[position]) || input[position] == '.')
+        {
+            position++;
+        }
+
+        tokenizer.position = position;
+        return token_t{TOKEN_NUMBER, strtod(&input[start], NULL), 0};
+    }
+
+    tokenizer.position = position + 1; // start from this position next time.
+    switch (current)
+    {
+        case '+':
+        {
+            return token_t{TOKEN_PLUS, 0, '+'};
+        }
+        case '-':
+        {
+            return token_t{TOKEN_MINUS, 0, '-'};
+        }
+        case '*':
+        {
+            return token_t{TOKEN_MULTIPLY, 0, '*'};
+        }
+        case '/':
+        {
+            return token_t{TOKEN_DIVIDE, 0, '/'};
+        }
+        default:
+        {
+            std::cerr << "Unknown character: " << current << '\n';
+            exit(1);
+        }
+    }
 }
 
-int evaluate(const node_t* node)
+struct parser_t
 {
-	if (nullptr == node)
-	{
-		return 0;
-	}
-
-	if (node->tag == OPERATOR)
-	{
-
-		// we can do some dispatch here with lambda functions or whatever but I don't care.
-		if (node->data.my_operator == '+')
-		{
-			return evaluate(node->lhs) + evaluate(node->rhs);
-		}
-	}
-
-	if (node->tag == LITERAL)
-	{
-		return node->data.literal;
-	}
-
-	assert(true);
-	return 0;
-}
+    tokenizer_t tokenizer;
+    token_t current_token;
+};
 
 
-
-static bool isoperator(char c)
-{	
-	auto operators = std::string{"+-*/"};
-
-	auto found = operators.find(c);
-
-	return (found != string::npos);
-}
-
-//@NOTE(SJM): the only thing this verifies is that if we are an operator node,
-// we have both lhs and rhs completed. this helps us detect the situation 1 +  + 2.
-// that is illegal. However, 1 + 2 + 3 is legal. In this case, the "most recent" node (or top level node)
-// after parsing 1 + 2 would be a node containing '+', but is "complete" in the sence that both its lhs and rhs contain valid values (in this case, 1 and 2).
-static bool is_completed_operator_node(const node_t* node)
+enum node_type
 {
-	assert(nullptr != node);
+    NODE_TYPE_NUMBER,
+    NODE_TYPE_BINARY_OP
+};
 
-	auto result = (nullptr != node->lhs && nullptr != node->rhs);
-	return result;
+
+// Base Node struct
+struct node_t {
+    // type definition
+    struct binary_operator_data_t{
+            char my_operator;
+            node_t* lhs;
+            node_t* rhs;
+    };
+    // type definition
+    union data_t
+    {
+        double value;
+        binary_operator_data_t binary_operator_data;
+    };
+
+    node_type type;
+    data_t data;
+};
+
+
+void print_node(node_t* node) {
+    if (node->type == NODE_TYPE_NUMBER) {
+        printf("%f", node->data.value);
+    } else if (node->type == NODE_TYPE_BINARY_OP) {
+        printf("(");
+        print_node(node->data.binary_operator_data.lhs);
+        printf(" %c ", node->data.binary_operator_data.my_operator);
+        print_node(node->data.binary_operator_data.rhs);
+        printf(")");
+    }
+}
+
+void free_node(node_t* node) {
+    if (node->type == NODE_TYPE_BINARY_OP) {
+        free_node(node->data.binary_operator_data.lhs);
+        free_node(node->data.binary_operator_data.rhs);
+    }
+    delete node;
 }
 
 
-// parse string 1 + 2 * 3
-int main ()
+// these are just constructors
+node_t* create_number_node(double value)
 {
-	auto string_to_parse = std::string{"1 + 2"};
+    node_t* number_node = new node_t{
+        .type = NODE_TYPE_NUMBER,
+        .data = node_t::data_t{
+            .value = value
+        }
+    };
 
-	//@FIXME(SJM): just assume single character numbers for now.
-	node_t* root_node = nullptr;
-	node_t* current_node = nullptr;
-	for (auto c: string_to_parse)
-	{
-		if (c == ' ' || c == '\0')
-		{
-			skip_this_character;
-		}
-
-		if (isdigit(c))
-		{
-			auto* literal_node = new node_t{};
-			literal_node->tag = LITERAL;
-
-			// wow this absolutely sucks and we should fix it.
-			char whatever[] = {c, '\0'};
-			literal_node->data.literal = std::strtol(whatever, nullptr, 10);; 
-
-			if (nullptr != current_node) // do we have a node already?
-			{
-				if (current_node->tag == LITERAL)
-				{
-					assert(current_node->tag != LITERAL && "trying to read a literal after a literal (i.e.) 1 1. This is not allowed.\n");
-				}
-
-				if (current_node->tag == OPERATOR)
-				{
-					assert(current_node->lhs != nullptr); // we should have a lhs at this point.
-				}
-				current_node->rhs = literal_node;
-				go_to_next_character;
-			}
-
-			if (nullptr == current_node)
-			{
-				current_node = literal_node;
-			}
-
-		}
-
-		// are we an operator?
-		if (isoperator(c))
-		{
-
-			// is the current node (lhs) a literal?
-			if (current_node->tag == LITERAL)
-			{
-				// great, we can create a new node. current_node is a literal, attach it to lhs.
-				auto* operator_node = new node_t{};
-				operator_node->tag = OPERATOR;
-				operator_node->data.my_operator = c;
-				operator_node->lhs = current_node;
-				current_node = operator_node;
-
-				go_to_next_character;
-			}
-
-			if (current_node->tag == OPERATOR)
-			{
-				if (is_completed_operator_node(current_node))
-				{
-					// great: we can attach the current node to lhs of the new node, and continue.
-					auto* operator_node = new node_t{};
-					operator_node->tag = OPERATOR;
-					operator_node->data.my_operator = c;
-					operator_node->lhs = current_node;
-					current_node = operator_node;
-
-					go_to_next_character;
-				} 
-			}
-		}
-	}
-	// never fear, never free.
-	print_nodes(current_node);
-	std::cout << "evaluate: " << evaluate(current_node) << '\n';
-
+    return number_node;
 }
 
-/* logically,what should happen:
-	read 1: create a new node, insert 1 in it. this is the root node.
-	read '+': okay, if our current node is a literal -> this is incorrect: in essence, we can have (1 + 2) + 3, in which case the root node would be '+'. 
-	this indicates we need some sort of 'completeness' flag in the node? ah, we can use the fact that both lhs and rhs need not be null.
-*/
 
+// these are just constructors
+node_t*  create_binary_operator_node(char my_operator, node_t* lhs, node_t* rhs)
+{
+    node_t* binary_operator_node = new node_t{};
+    binary_operator_node->type = NODE_TYPE_BINARY_OP;
+    binary_operator_node->data.binary_operator_data = node_t::binary_operator_data_t{
+            .my_operator = my_operator,
+            .lhs = lhs,
+            .rhs = rhs
+    };
+    return binary_operator_node;
+}
+
+// <expression>    ::= <term> { ("+" | "-") <term> }
+// <term>          ::= <factor> { ("*" | "/") <factor> }
+// <factor>        ::= <number> | "(" <expression> ")"
+// <number>        ::= <digit> { <digit> } [ "." <digit> { <digit> } ]
+// <digit>         ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+
+
+//FIXME(SMIA) no support for parenthesis now. we will add that later.
+node_t* parse_factor(parser_t& parser)
+{
+    if (parser.current_token.token_type == TOKEN_NUMBER)
+    {
+        node_t* node = create_number_node(parser.current_token.value);
+        parser.current_token = next_token(parser.tokenizer);
+        return node;
+    };
+
+    assert(false && "tried to find a number but could not find any.\n");
+    return nullptr;
+}
+
+/// aaah, this chews through sequential 1 * 2 * 3 * 4.
+// creating:
+// 1 * (2 * (3 * 4))))
+node_t* parse_term(parser_t& parser)
+{
+    node_t* node = parse_factor(parser);
+    while (parser.current_token.token_type == TOKEN_MULTIPLY || parser.current_token.token_type == TOKEN_DIVIDE) {
+        char op = (parser.current_token.token_type == TOKEN_MULTIPLY) ? '*' : '/';
+        parser.current_token = next_token(parser.tokenizer);
+        node = create_binary_operator_node(op, node, parse_factor(parser));
+    };
+    return node;
+}
+
+
+node_t* parse_expression(parser_t& parser)
+{
+     node_t* node = parse_term(parser);
+     while(parser.current_token.token_type == TOKEN_PLUS || parser.current_token.token_type == TOKEN_MINUS)
+     {
+       char op = (parser.current_token.token_type == TOKEN_PLUS) ? '+' : '-';
+       parser.current_token = next_token(parser.tokenizer);
+       node = create_binary_operator_node(op, node, parse_term(parser));
+     }
+
+     return node;
+}
+
+
+int main()
+{
+    auto string_to_parse = std::string{"1 + 2 * 3 + 4"};
+
+    auto parser = parser_t{
+        .tokenizer = tokenizer_t{
+            .input = string_to_parse,
+            .position = std::size_t{0}
+        },
+        .current_token = {}
+    };
+    parser.current_token = next_token(parser.tokenizer);
+
+    node_t* root_node = parse_expression(parser);
+
+    print_node(root_node);
+    free_node(root_node);
+
+
+
+
+
+}
